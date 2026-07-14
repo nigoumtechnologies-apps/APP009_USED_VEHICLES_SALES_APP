@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <title>ShowroomPro</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
   :root{
     --ink:#0f1210; --panel:#171c19; --panel-2:#1e2420; --line:#2a322c;
@@ -116,6 +117,17 @@
   .source-bar-label{display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;}
   .source-bar-track{background:var(--panel-2);border-radius:6px;height:8px;overflow:hidden;}
   .source-bar-fill{background:var(--moss);height:100%;border-radius:6px;}
+
+  .import-drop{border:2px dashed var(--line);border-radius:10px;padding:24px;text-align:center;cursor:pointer;margin-bottom:14px;}
+  .import-drop.dragover{border-color:var(--amber);background:rgba(232,161,61,.06);}
+  .import-drop p{margin:0;font-size:12px;color:var(--text-dim);}
+  .preview-table{width:100%;border-collapse:collapse;font-size:11px;margin-bottom:12px;}
+  .preview-table th{text-align:left;font-family:var(--mono);text-transform:uppercase;font-size:9px;color:var(--text-dim);padding:6px 8px;border-bottom:1px solid var(--line);}
+  .preview-table td{padding:6px 8px;border-bottom:1px solid var(--line);}
+  .preview-table tr.row-skip td{color:var(--text-dim);text-decoration:line-through;}
+  .preview-summary{display:flex;gap:16px;font-size:12px;margin-bottom:12px;}
+  .preview-summary span.ok{color:var(--moss);}
+  .preview-summary span.skip{color:var(--rust);}
 </style>
 </head>
 <body>
@@ -140,6 +152,7 @@
     </div>
     <div style="display:flex;gap:8px;">
       <button id="dashboardBtn" onclick="openDashboardModal()" style="background:none;border:1px solid var(--line);color:var(--amber);border-radius:6px;padding:5px 10px;font-size:11px;cursor:pointer;">📊 Dashboard</button>
+      <button id="bulkImportBtn" onclick="openBulkImportModal()" class="hidden" style="background:none;border:1px solid var(--line);color:var(--amber);border-radius:6px;padding:5px 10px;font-size:11px;cursor:pointer;">⬆ Import</button>
       <button id="logoutBtn" onclick="doLogout()">Log out</button>
     </div>
   </header>
@@ -242,6 +255,9 @@ async function showApp() {
   document.getElementById('loginScreen').classList.add('hidden');
   document.getElementById('app').classList.remove('hidden');
   document.getElementById('whoami').textContent = session.fullName + ' · ' + session.role;
+  if (session.role === 'Admin') {
+    document.getElementById('bulkImportBtn').classList.remove('hidden');
+  }
   await loadLists();
   await loadVehicles();
 }
@@ -603,6 +619,153 @@ async function openDashboardModal() {
       </div>
     </div>`;
   document.body.insertAdjacentHTML('beforeend', html);
+}
+
+// ============ BULK IMPORT MODAL ============
+let parsedImportRows = [];
+
+function openBulkImportModal() {
+  const html = `
+    <div class="modal-overlay" id="modalOverlay">
+      <div class="modal">
+        <div class="modal-head"><h2>Bulk Import Stock</h2><button class="modal-close" onclick="closeModal()">✕</button></div>
+        <div class="import-drop" id="importDrop" onclick="document.getElementById('importFile').click()">
+          <p>Tap to choose an Excel or CSV file<br>Columns expected: RegNo, Make, Model, Year, KMDriven, PurchasePrice, ListedPrice, Source</p>
+          <input type="file" id="importFile" accept=".xlsx,.xls,.csv" class="hidden" onchange="handleImportFile(event)">
+        </div>
+        <div id="importPreviewArea"></div>
+        <div class="modal-error" id="importError"></div>
+        <div class="modal-actions">
+          <button class="btn-secondary" onclick="closeModal()">Cancel</button>
+          <button class="btn-amber" id="importSubmitBtn" onclick="submitBulkImport()" disabled>Import Vehicles</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.insertAdjacentHTML('beforeend', html);
+}
+
+function handleImportFile(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const data = new Uint8Array(e.target.result);
+      const workbook = XLSX.read(data, { type: 'array' });
+      const sheetName = workbook.SheetNames[0];
+      const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: '' });
+      parsedImportRows = normalizeImportRows(rows);
+      renderImportPreview();
+    } catch (err) {
+      document.getElementById('importError').textContent = 'Could not read file — check it is a valid Excel/CSV';
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function normalizeImportRows(rows) {
+  // Case-insensitive header matching so "reg no", "RegNo", "Reg. No" style variance still works
+  const fieldAliases = {
+    RegNo: ['regno', 'reg no', 'reg. no', 'registration', 'registration no'],
+    Make: ['make', 'brand'],
+    Model: ['model'],
+    Year: ['year', 'yr'],
+    KMDriven: ['kmdriven', 'km driven', 'km', 'kilometers'],
+    PurchasePrice: ['purchaseprice', 'purchase price', 'cost'],
+    ListedPrice: ['listedprice', 'listed price', 'price', 'asking price'],
+    Source: ['source']
+  };
+
+  return rows.map(row => {
+    const normalized = {};
+    const rowKeysLower = {};
+    Object.keys(row).forEach(k => { rowKeysLower[k.toLowerCase().trim()] = row[k]; });
+
+    Object.keys(fieldAliases).forEach(field => {
+      const alias = fieldAliases[field].find(a => rowKeysLower[a] !== undefined);
+      normalized[field] = alias ? rowKeysLower[alias] : '';
+    });
+    return normalized;
+  });
+}
+
+function renderImportPreview() {
+  const existingRegNos = new Set(
+    vehicles.filter(v => v.Status !== 'delivered').map(v => String(v.RegNo).toUpperCase())
+  );
+  const seenInFile = new Set();
+
+  let okCount = 0, skipCount = 0;
+  const rowsHtml = parsedImportRows.map(r => {
+    const regNo = String(r.RegNo || '').toUpperCase().trim();
+    let skip = false, reason = '';
+    if (!regNo || !r.Make || !r.Model) { skip = true; reason = 'missing required field'; }
+    else if (existingRegNos.has(regNo)) { skip = true; reason = 'already in stock'; }
+    else if (seenInFile.has(regNo)) { skip = true; reason = 'duplicate in file'; }
+
+    if (skip) skipCount++; else { okCount++; seenInFile.add(regNo); }
+
+    return `<tr class="${skip ? 'row-skip' : ''}">
+      <td>${escapeHtml(regNo || '—')}</td>
+      <td>${escapeHtml(r.Make)}</td>
+      <td>${escapeHtml(r.Model)}</td>
+      <td>${escapeHtml(r.ListedPrice)}</td>
+      <td>${skip ? reason : 'ready'}</td>
+    </tr>`;
+  }).join('');
+
+  const area = document.getElementById('importPreviewArea');
+  area.innerHTML = `
+    <div class="preview-summary"><span class="ok">${okCount} ready to import</span><span class="skip">${skipCount} skipped</span></div>
+    <div style="max-height:220px;overflow-y:auto;">
+      <table class="preview-table">
+        <thead><tr><th>Reg No</th><th>Make</th><th>Model</th><th>Price</th><th>Status</th></tr></thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+    </div>`;
+
+  document.getElementById('importSubmitBtn').disabled = okCount === 0;
+}
+
+async function submitBulkImport() {
+  const errEl = document.getElementById('importError');
+  const existingRegNos = new Set(
+    vehicles.filter(v => v.Status !== 'delivered').map(v => String(v.RegNo).toUpperCase())
+  );
+  const seenInFile = new Set();
+
+  const toImport = parsedImportRows.filter(r => {
+    const regNo = String(r.RegNo || '').toUpperCase().trim();
+    if (!regNo || !r.Make || !r.Model) return false;
+    if (existingRegNos.has(regNo) || seenInFile.has(regNo)) return false;
+    seenInFile.add(regNo);
+    return true;
+  }).map(r => ({
+    RegNo: String(r.RegNo).toUpperCase().trim(),
+    Make: r.Make,
+    Model: r.Model,
+    Year: r.Year,
+    KMDriven: r.KMDriven,
+    PurchasePrice: r.PurchasePrice,
+    ListedPrice: r.ListedPrice,
+    Source: r.Source
+  }));
+
+  if (toImport.length === 0) { errEl.textContent = 'Nothing to import'; return; }
+
+  document.getElementById('importSubmitBtn').disabled = true;
+  document.getElementById('importSubmitBtn').textContent = 'Importing...';
+
+  try {
+    const result = await api('importVehicles', { vehicles: toImport, username: session.username }, 'POST');
+    if (!result.success) { errEl.textContent = result.error; return; }
+    closeModal();
+    showToast(`Imported ${result.added} vehicles${result.skipped.length ? ', ' + result.skipped.length + ' skipped' : ''}`);
+    await loadVehicles();
+  } catch (e) {
+    errEl.textContent = 'Connection error during import';
+  }
 }
 
 // ============ MODAL UTIL ============
