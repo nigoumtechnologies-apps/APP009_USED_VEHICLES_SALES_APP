@@ -128,6 +128,20 @@
   .preview-summary{display:flex;gap:16px;font-size:12px;margin-bottom:12px;}
   .preview-summary span.ok{color:var(--moss);}
   .preview-summary span.skip{color:var(--rust);}
+
+  .report-table{width:100%;border-collapse:collapse;font-size:11px;}
+  .report-table th{text-align:left;font-family:var(--mono);text-transform:uppercase;font-size:9px;color:var(--text-dim);padding:8px 6px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--panel);}
+  .report-table td{padding:7px 6px;border-bottom:1px solid var(--line);}
+  .report-controls{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;}
+  .report-controls select{background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:8px 10px;color:var(--text);font-size:12px;}
+
+  @media print {
+    body *{visibility:hidden;}
+    #printArea, #printArea *{visibility:visible;}
+    #printArea{position:absolute;top:0;left:0;width:100%;padding:20px;color:#000;background:#fff;}
+    #printArea .report-table th, #printArea .report-table td{border-color:#ccc;color:#000;}
+    #printArea .report-table th{background:#fff;}
+  }
 </style>
 </head>
 <body>
@@ -153,6 +167,7 @@
     <div style="display:flex;gap:8px;">
       <button id="dashboardBtn" onclick="openDashboardModal()" style="background:none;border:1px solid var(--line);color:var(--amber);border-radius:6px;padding:5px 10px;font-size:11px;cursor:pointer;">📊 Dashboard</button>
       <button id="bulkImportBtn" onclick="openBulkImportModal()" class="hidden" style="background:none;border:1px solid var(--line);color:var(--amber);border-radius:6px;padding:5px 10px;font-size:11px;cursor:pointer;">⬆ Import</button>
+      <button id="reportsBtn" onclick="openReportsModal()" class="hidden" style="background:none;border:1px solid var(--line);color:var(--amber);border-radius:6px;padding:5px 10px;font-size:11px;cursor:pointer;">🖨 Reports</button>
       <button id="logoutBtn" onclick="doLogout()">Log out</button>
     </div>
   </header>
@@ -255,8 +270,12 @@ async function showApp() {
   document.getElementById('loginScreen').classList.add('hidden');
   document.getElementById('app').classList.remove('hidden');
   document.getElementById('whoami').textContent = session.fullName + ' · ' + session.role;
-  if (String(session.role).toLowerCase() === 'admin') {
+  const roleLower = String(session.role).toLowerCase();
+  if (roleLower === 'admin') {
     document.getElementById('bulkImportBtn').classList.remove('hidden');
+  }
+  if (roleLower === 'admin' || roleLower === 'manager') {
+    document.getElementById('reportsBtn').classList.remove('hidden');
   }
   await loadLists();
   await loadVehicles();
@@ -766,6 +785,91 @@ async function submitBulkImport() {
   } catch (e) {
     errEl.textContent = 'Connection error during import';
   }
+}
+
+// ============ REPORTS MODAL ============
+function openReportsModal() {
+  const html = `
+    <div class="modal-overlay" id="modalOverlay">
+      <div class="modal" style="max-width:800px;">
+        <div class="modal-head"><h2>Stock Report</h2><button class="modal-close" onclick="closeModal()">✕</button></div>
+        <div class="report-controls">
+          <select id="reportStatusFilter" onchange="renderReportTable()">
+            <option value="all">All statuses</option>
+            <option value="intake">Intake</option>
+            <option value="listed">Listed</option>
+            <option value="reserved">Reserved</option>
+            <option value="sold">Sold</option>
+            <option value="delivered">Delivered</option>
+          </select>
+          <button class="btn-secondary" style="flex:none;padding:8px 14px;" onclick="exportReportCSV()">⬇ Export CSV</button>
+          <button class="btn-amber" style="flex:none;padding:8px 14px;" onclick="printReport()">🖨 Print</button>
+        </div>
+        <div id="printArea" style="max-height:400px;overflow-y:auto;">
+          <table class="report-table" id="reportTable"></table>
+        </div>
+      </div>
+    </div>`;
+  document.body.insertAdjacentHTML('beforeend', html);
+  renderReportTable();
+}
+
+function getReportRows() {
+  const filter = document.getElementById('reportStatusFilter')?.value || 'all';
+  return vehicles.filter(v => filter === 'all' || v.Status === filter);
+}
+
+function renderReportTable() {
+  const rows = getReportRows();
+  const canSeeCost = session.role.toLowerCase() !== 'sales';
+
+  const costHeader = canSeeCost ? '<th>Purchase ₹</th>' : '';
+  const listedHeader = '<th>Listed ₹</th>';
+
+  const bodyRows = rows.map(v => `
+    <tr>
+      <td>${escapeHtml(v.RegNo)}</td>
+      <td>${escapeHtml(v.Make)} ${escapeHtml(v.Model)}</td>
+      <td>${v.Year || '—'}</td>
+      <td>${v.KMDriven || '—'}</td>
+      ${canSeeCost ? `<td>${v.PurchasePrice ? Number(v.PurchasePrice).toLocaleString('en-IN') : '—'}</td>` : ''}
+      <td>${v.ListedPrice ? Number(v.ListedPrice).toLocaleString('en-IN') : '—'}</td>
+      <td>${escapeHtml(v.Status)}</td>
+      <td>${escapeHtml(v.Source || '—')}</td>
+    </tr>`).join('');
+
+  document.getElementById('reportTable').innerHTML = `
+    <thead><tr><th>Reg No</th><th>Vehicle</th><th>Year</th><th>KM</th>${costHeader}${listedHeader}<th>Status</th><th>Source</th></tr></thead>
+    <tbody>${bodyRows || '<tr><td colspan="8" style="color:var(--text-dim);">No vehicles match this filter</td></tr>'}</tbody>`;
+}
+
+function printReport() {
+  window.print();
+}
+
+function exportReportCSV() {
+  const rows = getReportRows();
+  const canSeeCost = session.role.toLowerCase() !== 'sales';
+
+  const headers = ['RegNo', 'Make', 'Model', 'Year', 'KMDriven'];
+  if (canSeeCost) headers.push('PurchasePrice');
+  headers.push('ListedPrice', 'Status', 'Source', 'SoldPrice', 'BuyerName', 'BuyerPhone');
+
+  const csvRows = [headers.join(',')];
+  rows.forEach(v => {
+    const line = [v.RegNo, v.Make, v.Model, v.Year, v.KMDriven];
+    if (canSeeCost) line.push(v.PurchasePrice);
+    line.push(v.ListedPrice, v.Status, v.Source, v.SoldPrice, v.BuyerName, v.BuyerPhone);
+    csvRows.push(line.map(f => `"${String(f ?? '').replace(/"/g, '""')}"`).join(','));
+  });
+
+  const blob = new Blob([csvRows.join('\n')], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'showroompro-stock-' + new Date().toISOString().slice(0, 10) + '.csv';
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 // ============ MODAL UTIL ============
