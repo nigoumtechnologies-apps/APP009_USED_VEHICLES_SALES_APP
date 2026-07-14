@@ -255,7 +255,7 @@ async function showApp() {
   document.getElementById('loginScreen').classList.add('hidden');
   document.getElementById('app').classList.remove('hidden');
   document.getElementById('whoami').textContent = session.fullName + ' · ' + session.role;
-  if (session.role === 'Admin') {
+  if (String(session.role).toLowerCase() === 'admin') {
     document.getElementById('bulkImportBtn').classList.remove('hidden');
   }
   await loadLists();
