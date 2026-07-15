@@ -251,6 +251,7 @@ let session = null; // {username, fullName, role}
 let vehicles = [];
 let currentFilter = 'all';
 let lists = {};
+let settings = {}; // client-controlled feature toggles, loaded from Settings sheet
 
 // ============ INIT ============
 window.addEventListener('DOMContentLoaded', () => {
@@ -325,14 +326,34 @@ async function showApp() {
   document.getElementById('app').classList.remove('hidden');
   document.getElementById('whoami').textContent = session.fullName + ' · ' + session.role;
   const roleLower = String(session.role).toLowerCase();
-  if (roleLower === 'admin') {
+
+  await loadSettings();
+
+  const settingOn = (key) => settings[key] !== false; // default to on if key missing
+
+  if (roleLower === 'admin' && settingOn('feature_bulkImport')) {
     document.getElementById('bulkImportBtn').classList.remove('hidden');
   }
-  if (roleLower === 'admin' || roleLower === 'manager') {
+  if ((roleLower === 'admin' || roleLower === 'manager') && settingOn('feature_reports')) {
     document.getElementById('reportsBtn').classList.remove('hidden');
   }
+  if (settingOn('feature_dashboard')) {
+    document.getElementById('dashboardBtn').classList.remove('hidden');
+  } else {
+    document.getElementById('dashboardBtn').classList.add('hidden');
+  }
+
   await loadLists();
   await loadVehicles();
+}
+
+async function loadSettings() {
+  try {
+    const result = await api('getSettings');
+    settings = result.success ? result.settings : {};
+  } catch (e) {
+    settings = {}; // fall back to all-features-on defaults if Settings sheet unreachable
+  }
 }
 
 // ============ DATA LOAD ============
@@ -484,7 +505,7 @@ function openEditModal(vehicleId) {
 
   const makeOpts = (lists.Make || []).map(m => `<option value="${m}" ${m === v.Make ? 'selected' : ''}>${m}</option>`).join('');
   const sourceOpts = (lists.Source || []).map(s => `<option value="${s}" ${s === v.Source ? 'selected' : ''}>${s}</option>`).join('');
-  const isAdmin = String(session.role).toLowerCase() === 'admin';
+  const isAdmin = String(session.role).toLowerCase() === 'admin' && settings['feature_deleteVehicle'] !== false;
 
   const html = `
     <div class="modal-overlay" id="modalOverlay">
@@ -572,9 +593,11 @@ async function openDetailModal(vehicleId) {
     return `<div class="stage-dot ${dotClass}"></div>` + (i < STAGES.length - 1 ? `<div class="stage-line ${lineClass}"></div>` : '');
   }).join('');
 
+  const settingOn = (key) => settings[key] !== false;
   const canSeeCost = session.role !== 'Sales';
-  const canShare = String(session.role).toLowerCase() === 'admin' || String(session.role).toLowerCase() === 'manager';
-  const canEdit = canShare; // Manager or Admin
+  const canShare = (String(session.role).toLowerCase() === 'admin' || String(session.role).toLowerCase() === 'manager') && settingOn('feature_shareLinks');
+  const canEdit = (String(session.role).toLowerCase() === 'admin' || String(session.role).toLowerCase() === 'manager') && settingOn('feature_editVehicle');
+  const showPhotos = settingOn('feature_photos');
   const priceInfo = canSeeCost && v.PurchasePrice
     ? `<div class="form-field"><label>Purchase Price</label><div style="font-size:13px;padding-top:8px;">₹${Number(v.PurchasePrice).toLocaleString('en-IN')}</div></div>`
     : '';
@@ -604,8 +627,9 @@ async function openDetailModal(vehicleId) {
         <div style="font-family:var(--mono);font-size:24px;color:var(--amber);font-weight:700;margin:8px 0;">₹${Number(v.ListedPrice || 0).toLocaleString('en-IN')}</div>
         <div class="stage-track">${trackHtml}</div>
 
+        ${showPhotos ? `
         <div id="photoGridArea"><div class="photo-grid" id="photoGrid"></div></div>
-        <input type="file" id="photoFileInput" accept="image/*" multiple class="hidden" onchange="handlePhotoUpload(event, '${vehicleId}')">
+        <input type="file" id="photoFileInput" accept="image/*" multiple class="hidden" onchange="handlePhotoUpload(event, '${vehicleId}')">` : ''}
 
         <div class="form-grid">
           <div class="form-field"><label>Reg No</label><div style="font-size:13px;padding-top:4px;">${escapeHtml(v.RegNo)}</div></div>
@@ -623,7 +647,7 @@ async function openDetailModal(vehicleId) {
       </div>
     </div>`;
   document.body.insertAdjacentHTML('beforeend', html);
-  loadPhotoGrid(vehicleId);
+  if (showPhotos) loadPhotoGrid(vehicleId);
 }
 
 async function doListVehicle(vehicleId) {
@@ -687,14 +711,17 @@ async function openLeadsModal(vehicleId) {
     ? leads.map(l => {
         const phoneDigits = String(l.Phone).replace(/[^\d+]/g, '');
         const waText = encodeURIComponent(`Hi ${l.CustomerName}, following up on your enquiry about the ${v.Make} ${v.Model}.`);
+        const contactRow = settings['feature_whatsappLeadContact'] !== false
+          ? `<div class="lead-contact-row">
+              <a href="tel:${phoneDigits}" class="lead-contact-btn call">📞 Call</a>
+              <a href="https://wa.me/${phoneDigits.replace('+', '')}?text=${waText}" target="_blank" class="lead-contact-btn wa">📱 WhatsApp</a>
+            </div>`
+          : '';
         return `
         <div class="lead-card">
           <div class="lead-top"><span class="name">${escapeHtml(l.CustomerName)}</span><span class="status">${escapeHtml(l.LeadStatus)}</span></div>
           <div class="lead-veh">📞 ${escapeHtml(l.Phone)} · Assigned: ${escapeHtml(l.AssignedTo || '—')}</div>
-          <div class="lead-contact-row">
-            <a href="tel:${phoneDigits}" class="lead-contact-btn call">📞 Call</a>
-            <a href="https://wa.me/${phoneDigits.replace('+', '')}?text=${waText}" target="_blank" class="lead-contact-btn wa">📱 WhatsApp</a>
-          </div>
+          ${contactRow}
         </div>`;
       }).join('')
     : '<div style="color:var(--text-dim);font-size:12px;">No leads yet.</div>';
