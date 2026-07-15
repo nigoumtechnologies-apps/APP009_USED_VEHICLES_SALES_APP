@@ -472,6 +472,88 @@ async function submitAddVehicle() {
   }
 }
 
+// ============ EDIT VEHICLE MODAL ============
+function openEditModal(vehicleId) {
+  const v = vehicles.find(x => String(x.VehicleID) === String(vehicleId));
+  if (!v) return;
+  closeModal();
+
+  const makeOpts = (lists.Make || []).map(m => `<option value="${m}" ${m === v.Make ? 'selected' : ''}>${m}</option>`).join('');
+  const sourceOpts = (lists.Source || []).map(s => `<option value="${s}" ${s === v.Source ? 'selected' : ''}>${s}</option>`).join('');
+  const isAdmin = String(session.role).toLowerCase() === 'admin';
+
+  const html = `
+    <div class="modal-overlay" id="modalOverlay">
+      <div class="modal">
+        <div class="modal-head"><h2>Edit Vehicle</h2><button class="modal-close" onclick="closeModal()">✕</button></div>
+        <div class="form-grid">
+          <div class="form-field full"><label>Reg No</label><div style="font-size:13px;padding-top:4px;color:var(--text-dim);">${escapeHtml(v.RegNo)} (not editable)</div></div>
+          <div class="form-field"><label>Make</label><input id="e_Make" list="editMakeList" value="${escapeHtml(v.Make)}"></div>
+          <div class="form-field"><label>Model</label><input id="e_Model" value="${escapeHtml(v.Model)}"></div>
+          <div class="form-field"><label>Year</label><input id="e_Year" type="number" value="${v.Year || ''}"></div>
+          <div class="form-field"><label>KM Driven</label><input id="e_KMDriven" type="number" value="${v.KMDriven || ''}"></div>
+          <div class="form-field"><label>Purchase Price</label><input id="e_PurchasePrice" type="number" value="${v.PurchasePrice || ''}"></div>
+          <div class="form-field"><label>Listed Price</label><input id="e_ListedPrice" type="number" value="${v.ListedPrice || ''}"></div>
+          <div class="form-field full"><label>Source</label>
+            <select id="e_Source"><option value="">Select...</option>${sourceOpts}</select>
+          </div>
+        </div>
+        <datalist id="editMakeList">${makeOpts}</datalist>
+        <div class="modal-error" id="editError"></div>
+        <div class="modal-actions">
+          <button class="btn-secondary" onclick="closeModal()">Cancel</button>
+          <button class="btn-amber" onclick="submitEditVehicle('${vehicleId}')">Save Changes</button>
+        </div>
+        ${isAdmin ? `
+        <div style="margin-top:16px;border-top:1px solid var(--line);padding-top:14px;">
+          <button class="btn-secondary" style="width:100%;color:var(--rust);border-color:var(--rust);" onclick="doDeleteVehicle('${vehicleId}')">🗑 Delete Vehicle</button>
+        </div>` : ''}
+      </div>
+    </div>`;
+  document.body.insertAdjacentHTML('beforeend', html);
+}
+
+async function submitEditVehicle(vehicleId) {
+  const errEl = document.getElementById('editError');
+  const payload = {
+    vehicleId: vehicleId,
+    Make: document.getElementById('e_Make').value.trim(),
+    Model: document.getElementById('e_Model').value.trim(),
+    Year: document.getElementById('e_Year').value,
+    KMDriven: document.getElementById('e_KMDriven').value,
+    PurchasePrice: document.getElementById('e_PurchasePrice').value,
+    ListedPrice: document.getElementById('e_ListedPrice').value,
+    Source: document.getElementById('e_Source').value,
+    username: session.username
+  };
+  if (!payload.Make || !payload.Model) {
+    errEl.textContent = 'Make and Model are required';
+    return;
+  }
+  try {
+    const result = await api('editVehicle', payload);
+    if (!result.success) { errEl.textContent = result.error; return; }
+    closeModal();
+    showToast('Vehicle updated');
+    await loadVehicles();
+  } catch (e) {
+    errEl.textContent = 'Connection error';
+  }
+}
+
+async function doDeleteVehicle(vehicleId) {
+  if (!confirm('Delete this vehicle? It will be removed from stock but kept in records. This cannot be undone from the app.')) return;
+  try {
+    const result = await api('deleteVehicle', { vehicleId: vehicleId, username: session.username });
+    if (!result.success) { showToast(result.error); return; }
+    closeModal();
+    showToast('Vehicle deleted');
+    await loadVehicles();
+  } catch (e) {
+    showToast('Connection error deleting vehicle');
+  }
+}
+
 // ============ DETAIL / STAGE MODAL ============
 const STAGES = ['intake', 'listed', 'reserved', 'sold', 'delivered'];
 
@@ -488,6 +570,7 @@ async function openDetailModal(vehicleId) {
 
   const canSeeCost = session.role !== 'Sales';
   const canShare = String(session.role).toLowerCase() === 'admin' || String(session.role).toLowerCase() === 'manager';
+  const canEdit = canShare; // Manager or Admin
   const priceInfo = canSeeCost && v.PurchasePrice
     ? `<div class="form-field"><label>Purchase Price</label><div style="font-size:13px;padding-top:8px;">₹${Number(v.PurchasePrice).toLocaleString('en-IN')}</div></div>`
     : '';
@@ -506,7 +589,13 @@ async function openDetailModal(vehicleId) {
   const html = `
     <div class="modal-overlay" id="modalOverlay">
       <div class="modal">
-        <div class="modal-head"><h2>${escapeHtml(v.Make)} ${escapeHtml(v.Model)}</h2><button class="modal-close" onclick="closeModal()">✕</button></div>
+        <div class="modal-head">
+          <h2>${escapeHtml(v.Make)} ${escapeHtml(v.Model)}</h2>
+          <div style="display:flex;gap:10px;align-items:center;">
+            ${canEdit ? `<button class="modal-close" style="font-size:15px;" onclick="openEditModal('${vehicleId}')" title="Edit">✎</button>` : ''}
+            <button class="modal-close" onclick="closeModal()">✕</button>
+          </div>
+        </div>
         <span class="status-tag status-${v.Status}">${v.Status}</span>
         <div style="font-family:var(--mono);font-size:24px;color:var(--amber);font-weight:700;margin:8px 0;">₹${Number(v.ListedPrice || 0).toLocaleString('en-IN')}</div>
         <div class="stage-track">${trackHtml}</div>
@@ -1101,13 +1190,19 @@ async function openShareModal(vehicleId) {
   const linksHtml = existingLinks.length
     ? existingLinks.map(l => {
         const shareUrl = window.location.origin + window.location.pathname + '?share=' + l.ShareID;
+        const waText = encodeURIComponent(`Hi! Here's the vehicle you enquired about: ${shareUrl}`);
         return `
           <div class="lead-card">
             <div class="lead-top"><span class="name">Expires ${escapeHtml(l.ExpiryDate)}</span>
               <span class="status" style="cursor:pointer;color:var(--rust);" onclick="doRevokeShare('${l.ShareID}', '${vehicleId}')">Revoke</span>
             </div>
             <div class="lead-veh" style="word-break:break-all;">${shareUrl}</div>
-            <button class="btn-secondary" style="margin-top:6px;padding:6px;font-size:11px;" onclick="copyShareLink('${shareUrl}')">Copy Link</button>
+            <div style="display:flex;gap:6px;margin-top:6px;">
+              <button class="btn-secondary" style="padding:6px;font-size:11px;" onclick="copyShareLink('${shareUrl}')">Copy Link</button>
+              <a href="https://wa.me/?text=${waText}" target="_blank" style="flex:1;text-decoration:none;">
+                <button class="btn-secondary" style="width:100%;padding:6px;font-size:11px;color:var(--moss);border-color:var(--moss);">📱 WhatsApp</button>
+              </a>
+            </div>
           </div>`;
       }).join('')
     : '<div style="color:var(--text-dim);font-size:12px;">No active share links yet.</div>';
