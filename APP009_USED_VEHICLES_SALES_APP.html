@@ -142,9 +142,51 @@
     #printArea .report-table th, #printArea .report-table td{border-color:#ccc;color:#000;}
     #printArea .report-table th{background:#fff;}
   }
+
+  /* ---- PHOTO GRID (in vehicle detail) ---- */
+  .photo-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:12px 0;}
+  .photo-thumb{position:relative;aspect-ratio:1;border-radius:8px;overflow:hidden;background:var(--panel-2);cursor:pointer;}
+  .photo-thumb img{width:100%;height:100%;object-fit:cover;}
+  .photo-thumb .photo-del{position:absolute;top:3px;right:3px;background:rgba(15,18,16,.75);color:var(--rust);border:none;border-radius:50%;width:20px;height:20px;font-size:11px;cursor:pointer;}
+  .photo-add-tile{aspect-ratio:1;border:2px dashed var(--line);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:24px;color:var(--text-dim);cursor:pointer;}
+
+  /* ---- LIGHTBOX ---- */
+  .lightbox-overlay{position:fixed;inset:0;background:#000;z-index:300;display:flex;flex-direction:column;}
+  .lightbox-top{display:flex;justify-content:space-between;align-items:center;padding:14px 16px;color:#fff;}
+  .lightbox-close{background:none;border:none;color:#fff;font-size:22px;cursor:pointer;}
+  .lightbox-stage{flex:1;display:flex;align-items:center;justify-content:center;position:relative;overflow:hidden;}
+  .lightbox-stage img{max-width:100%;max-height:100%;object-fit:contain;}
+  .lightbox-nav{position:absolute;top:50%;transform:translateY(-50%);background:rgba(255,255,255,.1);border:none;color:#fff;width:40px;height:40px;border-radius:50%;font-size:20px;cursor:pointer;}
+  .lightbox-nav.prev{left:10px;}
+  .lightbox-nav.next{right:10px;}
+  .lightbox-caption{padding:14px 20px 24px;color:#fff;text-align:center;font-size:13px;background:linear-gradient(0deg, rgba(0,0,0,.6), transparent);}
+  .lightbox-caption input{width:100%;max-width:400px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);border-radius:6px;padding:8px 10px;color:#fff;font-size:12px;text-align:center;margin-top:6px;}
+  .lightbox-dots{display:flex;gap:6px;justify-content:center;padding-bottom:10px;}
+  .lightbox-dot{width:6px;height:6px;border-radius:50%;background:rgba(255,255,255,.3);}
+  .lightbox-dot.active{background:var(--amber);}
+
+  /* ---- SHARE VIEW (public, no login, no dark theme dependency) ---- */
+  .share-page{max-width:600px;margin:0 auto;background:var(--ink);min-height:100vh;color:var(--text);}
+  .share-hero{aspect-ratio:4/3;background:var(--panel-2);position:relative;}
+  .share-hero img{width:100%;height:100%;object-fit:cover;}
+  .share-hero-nav{position:absolute;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.4);border:none;color:#fff;width:36px;height:36px;border-radius:50%;font-size:18px;}
+  .share-hero-nav.prev{left:10px;}
+  .share-hero-nav.next{right:10px;}
+  .share-thumbs{display:flex;gap:6px;padding:10px 16px;overflow-x:auto;}
+  .share-thumbs img{width:56px;height:56px;object-fit:cover;border-radius:6px;flex-shrink:0;opacity:.5;cursor:pointer;}
+  .share-thumbs img.active{opacity:1;outline:2px solid var(--amber);}
+  .share-body{padding:20px;}
+  .share-body h1{font-size:22px;margin:0 0 4px;}
+  .share-body .meta{color:var(--text-dim);font-size:13px;margin-bottom:12px;}
+  .share-body .price{font-family:var(--mono);font-size:28px;color:var(--amber);font-weight:700;margin-bottom:20px;}
+  .share-caption{font-size:12px;color:var(--text-dim);padding:8px 16px;font-style:italic;}
+  .share-error{display:flex;align-items:center;justify-content:center;min-height:100vh;text-align:center;padding:24px;color:var(--text-dim);}
 </style>
 </head>
 <body>
+
+<!-- PUBLIC SHARE VIEW (no login) -->
+<div id="shareScreen" class="hidden"></div>
 
 <!-- LOGIN -->
 <div id="loginScreen">
@@ -208,6 +250,13 @@ let lists = {};
 
 // ============ INIT ============
 window.addEventListener('DOMContentLoaded', () => {
+  const urlParams = new URLSearchParams(window.location.search);
+  const shareId = urlParams.get('share');
+  if (shareId) {
+    loadShareView(shareId);
+    return;
+  }
+
   const saved = localStorage.getItem('showroompro_session');
   if (saved) {
     session = JSON.parse(saved);
@@ -437,6 +486,7 @@ async function openDetailModal(vehicleId) {
   }).join('');
 
   const canSeeCost = session.role !== 'Sales';
+  const canShare = String(session.role).toLowerCase() === 'admin' || String(session.role).toLowerCase() === 'manager';
   const priceInfo = canSeeCost && v.PurchasePrice
     ? `<div class="form-field"><label>Purchase Price</label><div style="font-size:13px;padding-top:8px;">₹${Number(v.PurchasePrice).toLocaleString('en-IN')}</div></div>`
     : '';
@@ -459,6 +509,10 @@ async function openDetailModal(vehicleId) {
         <span class="status-tag status-${v.Status}">${v.Status}</span>
         <div style="font-family:var(--mono);font-size:24px;color:var(--amber);font-weight:700;margin:8px 0;">₹${Number(v.ListedPrice || 0).toLocaleString('en-IN')}</div>
         <div class="stage-track">${trackHtml}</div>
+
+        <div id="photoGridArea"><div class="photo-grid" id="photoGrid"></div></div>
+        <input type="file" id="photoFileInput" accept="image/*" multiple class="hidden" onchange="handlePhotoUpload(event, '${vehicleId}')">
+
         <div class="form-grid">
           <div class="form-field"><label>Reg No</label><div style="font-size:13px;padding-top:4px;">${escapeHtml(v.RegNo)}</div></div>
           <div class="form-field"><label>KM Driven</label><div style="font-size:13px;padding-top:4px;">${v.KMDriven || '—'}</div></div>
@@ -469,11 +523,13 @@ async function openDetailModal(vehicleId) {
         <div class="modal-error" id="detailError"></div>
         <div class="modal-actions">
           <button class="btn-secondary" onclick="openLeadsModal('${vehicleId}')">View Leads</button>
+          ${canShare ? `<button class="btn-secondary" onclick="openShareModal('${vehicleId}')">Share</button>` : ''}
           ${actionHtml}
         </div>
       </div>
     </div>`;
   document.body.insertAdjacentHTML('beforeend', html);
+  loadPhotoGrid(vehicleId);
 }
 
 async function doListVehicle(vehicleId) {
@@ -870,6 +926,274 @@ function exportReportCSV() {
   a.download = 'showroompro-stock-' + new Date().toISOString().slice(0, 10) + '.csv';
   a.click();
   URL.revokeObjectURL(url);
+}
+
+// ============ PHOTOS (internal, in vehicle detail) ============
+let currentPhotoVehicleId = null;
+let currentPhotos = [];
+let lightboxIndex = 0;
+
+async function loadPhotoGrid(vehicleId) {
+  currentPhotoVehicleId = vehicleId;
+  try {
+    const result = await api('getPhotos', { vehicleId: vehicleId });
+    currentPhotos = result.success ? result.photos : [];
+  } catch (e) {
+    currentPhotos = [];
+  }
+  renderPhotoGrid();
+}
+
+function renderPhotoGrid() {
+  const grid = document.getElementById('photoGrid');
+  if (!grid) return;
+  const thumbsHtml = currentPhotos.map((p, i) => `
+    <div class="photo-thumb" onclick="openLightbox(${i})">
+      <img src="${p.url}" loading="lazy">
+      <button class="photo-del" onclick="event.stopPropagation(); doDeletePhoto('${p.photoId}')">✕</button>
+    </div>`).join('');
+  grid.innerHTML = thumbsHtml + `<div class="photo-add-tile" onclick="document.getElementById('photoFileInput').click()">+</div>`;
+}
+
+async function handlePhotoUpload(event, vehicleId) {
+  const files = Array.from(event.target.files || []);
+  if (!files.length) return;
+  showToast('Uploading ' + files.length + ' photo(s)...');
+
+  for (const file of files) {
+    try {
+      const base64 = await fileToBase64(file);
+      await api('uploadPhoto', {
+        vehicleId: vehicleId,
+        base64Data: base64,
+        mimeType: file.type,
+        fileName: file.name,
+        username: session.username
+      }, 'POST');
+    } catch (e) {
+      showToast('Failed to upload ' + file.name);
+    }
+  }
+  event.target.value = '';
+  showToast('Photos uploaded');
+  await loadPhotoGrid(vehicleId);
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result.split(',')[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+async function doDeletePhoto(photoId) {
+  if (!confirm('Delete this photo?')) return;
+  const result = await api('deletePhoto', { photoId: photoId });
+  if (result.success) { showToast('Photo deleted'); await loadPhotoGrid(currentPhotoVehicleId); }
+  else showToast(result.error);
+}
+
+// ---- Lightbox ----
+function openLightbox(index) {
+  lightboxIndex = index;
+  renderLightbox();
+}
+
+function renderLightbox() {
+  const existing = document.getElementById('lightboxOverlay');
+  if (existing) existing.remove();
+
+  const photo = currentPhotos[lightboxIndex];
+  if (!photo) return;
+
+  const dotsHtml = currentPhotos.map((p, i) => `<div class="lightbox-dot ${i === lightboxIndex ? 'active' : ''}"></div>`).join('');
+  const navHtml = currentPhotos.length > 1
+    ? `<button class="lightbox-nav prev" onclick="lightboxStep(-1)">‹</button><button class="lightbox-nav next" onclick="lightboxStep(1)">›</button>`
+    : '';
+
+  const html = `
+    <div class="lightbox-overlay" id="lightboxOverlay">
+      <div class="lightbox-top">
+        <span>${lightboxIndex + 1} / ${currentPhotos.length}</span>
+        <button class="lightbox-close" onclick="closeLightbox()">✕</button>
+      </div>
+      <div class="lightbox-stage">
+        ${navHtml}
+        <img src="${photo.url}">
+      </div>
+      <div class="lightbox-caption">
+        <input id="lightboxCaptionInput" placeholder="Add a comment (optional)" value="${escapeHtml(photo.caption || '')}" onchange="saveLightboxCaption()">
+      </div>
+      <div class="lightbox-dots">${dotsHtml}</div>
+    </div>`;
+  document.body.insertAdjacentHTML('beforeend', html);
+}
+
+function lightboxStep(dir) {
+  let next = lightboxIndex + dir;
+  if (next < 0) next = currentPhotos.length - 1;
+  if (next >= currentPhotos.length) next = 0;
+  lightboxIndex = next;
+  renderLightbox();
+}
+
+async function saveLightboxCaption() {
+  const val = document.getElementById('lightboxCaptionInput').value.trim();
+  const photo = currentPhotos[lightboxIndex];
+  photo.caption = val;
+  await api('updatePhotoCaption', { photoId: photo.photoId, caption: val });
+}
+
+function closeLightbox() {
+  const el = document.getElementById('lightboxOverlay');
+  if (el) el.remove();
+  renderPhotoGrid();
+}
+
+// ============ SHARE LINK MODAL (internal) ============
+async function openShareModal(vehicleId) {
+  closeModal();
+  const v = vehicles.find(x => String(x.VehicleID) === String(vehicleId));
+
+  let existingLinks = [];
+  try {
+    const result = await api('getShareLinks', { vehicleId: vehicleId });
+    if (result.success) existingLinks = result.links.filter(l => String(l.IsRevoked).toUpperCase() !== 'TRUE');
+  } catch (e) { /* non-fatal */ }
+
+  const today = new Date();
+  const defaultExpiry = new Date(today.getTime() + 7 * 24 * 60 * 60 * 1000);
+  const defaultExpiryStr = defaultExpiry.toISOString().slice(0, 10);
+  const minDateStr = today.toISOString().slice(0, 10);
+
+  const linksHtml = existingLinks.length
+    ? existingLinks.map(l => {
+        const shareUrl = window.location.origin + window.location.pathname + '?share=' + l.ShareID;
+        return `
+          <div class="lead-card">
+            <div class="lead-top"><span class="name">Expires ${escapeHtml(l.ExpiryDate)}</span>
+              <span class="status" style="cursor:pointer;color:var(--rust);" onclick="doRevokeShare('${l.ShareID}', '${vehicleId}')">Revoke</span>
+            </div>
+            <div class="lead-veh" style="word-break:break-all;">${shareUrl}</div>
+            <button class="btn-secondary" style="margin-top:6px;padding:6px;font-size:11px;" onclick="copyShareLink('${shareUrl}')">Copy Link</button>
+          </div>`;
+      }).join('')
+    : '<div style="color:var(--text-dim);font-size:12px;">No active share links yet.</div>';
+
+  const html = `
+    <div class="modal-overlay" id="modalOverlay">
+      <div class="modal">
+        <div class="modal-head"><h2>Share · ${escapeHtml(v.Make)} ${escapeHtml(v.Model)}</h2><button class="modal-close" onclick="closeModal()">✕</button></div>
+        <div style="font-size:12px;color:var(--text-dim);margin-bottom:12px;">Anyone with this link can view this vehicle's photos and price, no login needed. Choose how long the link stays active.</div>
+        <div class="form-field" style="margin-bottom:14px;">
+          <label>Link visible until</label>
+          <input type="date" id="shareExpiryInput" value="${defaultExpiryStr}" min="${minDateStr}">
+        </div>
+        <div class="modal-error" id="shareError"></div>
+        <div class="modal-actions">
+          <button class="btn-secondary" onclick="closeModal()">Close</button>
+          <button class="btn-amber" onclick="submitShareLink('${vehicleId}')">Create Link</button>
+        </div>
+        <div class="leads-list" style="margin-top:16px;">${linksHtml}</div>
+      </div>
+    </div>`;
+  document.body.insertAdjacentHTML('beforeend', html);
+}
+
+async function submitShareLink(vehicleId) {
+  const errEl = document.getElementById('shareError');
+  const expiryDate = document.getElementById('shareExpiryInput').value;
+  if (!expiryDate) { errEl.textContent = 'Pick an expiry date'; return; }
+
+  const result = await api('createShareLink', { vehicleId: vehicleId, expiryDate: expiryDate, username: session.username });
+  if (!result.success) { errEl.textContent = result.error; return; }
+
+  const shareUrl = window.location.origin + window.location.pathname + '?share=' + result.shareId;
+  showToast('Share link created');
+  copyShareLink(shareUrl);
+  openShareModal(vehicleId);
+}
+
+async function doRevokeShare(shareId, vehicleId) {
+  if (!confirm('Revoke this link? It will stop working immediately.')) return;
+  const result = await api('revokeShareLink', { shareId: shareId, username: session.username });
+  if (result.success) { showToast('Link revoked'); openShareModal(vehicleId); }
+  else showToast(result.error);
+}
+
+function copyShareLink(url) {
+  navigator.clipboard.writeText(url).then(
+    () => showToast('Link copied to clipboard'),
+    () => showToast('Could not copy — long-press to copy manually')
+  );
+}
+
+// ============ PUBLIC SHARE VIEW ============
+let shareViewPhotos = [];
+let shareViewIndex = 0;
+
+async function loadShareView(shareId) {
+  document.getElementById('loginScreen').classList.add('hidden');
+  document.getElementById('shareScreen').classList.remove('hidden');
+  document.getElementById('shareScreen').innerHTML = '<div class="share-error">Loading...</div>';
+
+  try {
+    const res = await fetch(GAS_URL + '?action=getSharedVehicle&shareId=' + encodeURIComponent(shareId));
+    const result = await res.json();
+    if (!result.success) {
+      document.getElementById('shareScreen').innerHTML = `<div class="share-error">${escapeHtml(result.error)}</div>`;
+      return;
+    }
+    renderShareView(result.vehicle, result.photos);
+  } catch (e) {
+    document.getElementById('shareScreen').innerHTML = '<div class="share-error">Could not load this link — check your connection.</div>';
+  }
+}
+
+function renderShareView(vehicle, photos) {
+  shareViewPhotos = photos;
+  shareViewIndex = 0;
+
+  const thumbsHtml = photos.map((p, i) =>
+    `<img src="${p.url}" class="${i === 0 ? 'active' : ''}" onclick="setShareHero(${i})" data-idx="${i}">`
+  ).join('');
+
+  const heroNavHtml = photos.length > 1
+    ? `<button class="share-hero-nav prev" onclick="shareHeroStep(-1)">‹</button><button class="share-hero-nav next" onclick="shareHeroStep(1)">›</button>`
+    : '';
+
+  const html = `
+    <div class="share-page">
+      <div class="share-hero">
+        ${photos.length ? `<img id="shareHeroImg" src="${photos[0].url}">` : '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-dim);">No photos yet</div>'}
+        ${heroNavHtml}
+      </div>
+      ${photos.length ? `<div class="share-caption" id="shareCaption">${escapeHtml(photos[0].caption || '')}</div>` : ''}
+      ${photos.length > 1 ? `<div class="share-thumbs" id="shareThumbs">${thumbsHtml}</div>` : ''}
+      <div class="share-body">
+        <h1>${escapeHtml(vehicle.Make)} ${escapeHtml(vehicle.Model)}</h1>
+        <div class="meta">${vehicle.Year || ''} · ${vehicle.KMDriven ? Number(vehicle.KMDriven).toLocaleString('en-IN') + ' km' : ''}</div>
+        <div class="price">₹${Number(vehicle.ListedPrice || 0).toLocaleString('en-IN')}</div>
+        <div style="font-size:12px;color:var(--text-dim);">Interested? Reply to the message this link was shared in, or contact the showroom directly.</div>
+      </div>
+    </div>`;
+  document.getElementById('shareScreen').innerHTML = html;
+}
+
+function setShareHero(idx) {
+  shareViewIndex = idx;
+  document.getElementById('shareHeroImg').src = shareViewPhotos[idx].url;
+  document.getElementById('shareCaption').textContent = shareViewPhotos[idx].caption || '';
+  document.querySelectorAll('#shareThumbs img').forEach((img, i) => img.classList.toggle('active', i === idx));
+}
+
+function shareHeroStep(dir) {
+  let next = shareViewIndex + dir;
+  if (next < 0) next = shareViewPhotos.length - 1;
+  if (next >= shareViewPhotos.length) next = 0;
+  setShareHero(next);
 }
 
 // ============ MODAL UTIL ============
