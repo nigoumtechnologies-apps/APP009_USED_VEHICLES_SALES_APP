@@ -275,6 +275,7 @@ async function api(action, params, method) {
   } else {
     const res = await fetch(GAS_URL, {
       method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify(Object.assign({ action: action }, params || {}))
     });
     return res.json();
@@ -864,10 +865,30 @@ function openReportsModal() {
         <div id="printArea" style="max-height:400px;overflow-y:auto;">
           <table class="report-table" id="reportTable"></table>
         </div>
+        ${String(session.role).toLowerCase() === 'admin' ? `
+        <div style="margin-top:16px;border-top:1px solid var(--line);padding-top:14px;">
+          <button class="btn-secondary" style="width:auto;padding:8px 14px;font-size:11px;" onclick="checkPhotoFolder()">📁 Check Photo Storage</button>
+          <div id="photoFolderInfo" style="font-size:11px;color:var(--text-dim);margin-top:8px;"></div>
+        </div>` : ''}
       </div>
     </div>`;
   document.body.insertAdjacentHTML('beforeend', html);
   renderReportTable();
+}
+
+async function checkPhotoFolder() {
+  const infoEl = document.getElementById('photoFolderInfo');
+  infoEl.textContent = 'Checking...';
+  try {
+    const result = await api('getPhotoFolderInfo', { username: session.username });
+    if (result.success) {
+      infoEl.innerHTML = `Folder "${escapeHtml(result.folderName)}" is ready. <a href="${result.folderUrl}" target="_blank" style="color:var(--amber);">Open in Drive ↗</a>`;
+    } else {
+      infoEl.textContent = 'Error: ' + result.error;
+    }
+  } catch (e) {
+    infoEl.textContent = 'Connection error checking folder';
+  }
 }
 
 function getReportRows() {
@@ -960,22 +981,30 @@ async function handlePhotoUpload(event, vehicleId) {
   if (!files.length) return;
   showToast('Uploading ' + files.length + ' photo(s)...');
 
+  let successCount = 0;
+  const errors = [];
   for (const file of files) {
     try {
       const base64 = await fileToBase64(file);
-      await api('uploadPhoto', {
+      const result = await api('uploadPhoto', {
         vehicleId: vehicleId,
         base64Data: base64,
         mimeType: file.type,
         fileName: file.name,
         username: session.username
       }, 'POST');
+      if (result.success) successCount++;
+      else errors.push(file.name + ': ' + (result.error || 'unknown error'));
     } catch (e) {
-      showToast('Failed to upload ' + file.name);
+      errors.push(file.name + ': connection error');
     }
   }
   event.target.value = '';
-  showToast('Photos uploaded');
+  if (errors.length) {
+    showToast(successCount + ' uploaded, ' + errors.length + ' failed — ' + errors[0]);
+  } else {
+    showToast('Photos uploaded');
+  }
   await loadPhotoGrid(vehicleId);
 }
 
@@ -1056,6 +1085,7 @@ function closeLightbox() {
 async function openShareModal(vehicleId) {
   closeModal();
   const v = vehicles.find(x => String(x.VehicleID) === String(vehicleId));
+  if (!v) { showToast('Vehicle not found — refreshing stock list'); await loadVehicles(); return; }
 
   let existingLinks = [];
   try {
@@ -1118,9 +1148,13 @@ async function submitShareLink(vehicleId) {
 
 async function doRevokeShare(shareId, vehicleId) {
   if (!confirm('Revoke this link? It will stop working immediately.')) return;
-  const result = await api('revokeShareLink', { shareId: shareId, username: session.username });
-  if (result.success) { showToast('Link revoked'); openShareModal(vehicleId); }
-  else showToast(result.error);
+  try {
+    const result = await api('revokeShareLink', { shareId: shareId, username: session.username });
+    if (result.success) { showToast('Link revoked'); openShareModal(vehicleId); }
+    else showToast('Revoke failed: ' + (result.error || 'unknown error'));
+  } catch (e) {
+    showToast('Revoke failed: connection error');
+  }
 }
 
 function copyShareLink(url) {
